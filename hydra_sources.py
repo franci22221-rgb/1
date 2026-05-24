@@ -144,21 +144,28 @@ def search_thunderstore(query: str, game_name: str = "") -> list[dict]:
     for pkg in packages:
         name = pkg.get("name", "")
         full_name = pkg.get("full_name", "")
-        desc = (pkg.get("versions", [{}])[0].get("description", "")
-                if pkg.get("versions") else "")
+        latest = pkg.get("versions", [{}])[0] if pkg.get("versions") else {}
+        desc = latest.get("description", "")
         searchable = f"{name} {full_name} {desc}".lower()
         if all(t in searchable for t in q_terms):
             scored.append(pkg)
     scored.sort(key=lambda p: p.get("rating_score", 0), reverse=True)
     out = []
-    for pkg in scored[:50]:
+    for pkg in scored:
         latest = pkg["versions"][0] if pkg.get("versions") else {}
+        deps = latest.get("dependencies", [])
         out.append({
             "name": pkg.get("name", "?"),
             "author": pkg.get("owner", "?"),
             "downloads": int(latest.get("downloads", 0)),
             "source": "Thunderstore",
             "version": latest.get("version_number", ""),
+            "description": latest.get("description", ""),
+            "icon_url": latest.get("icon", ""),
+            "dependencies": deps,
+            "categories": [c.get("name", "") for c in pkg.get("categories", [])],
+            "rating": pkg.get("rating_score", 0),
+            "date_updated": pkg.get("date_updated", ""),
             "ts_full_name": pkg.get("full_name", ""),
             "ts_community": community,
             "ts_download_url": latest.get("download_url", ""),
@@ -176,7 +183,7 @@ def search_modrinth(query: str, game_id: str = "", game_name: str = "") -> list[
       facets.append(f'["categories:{modrinth_game}"]')
   facets_str = "[" + ",".join(facets) + "]"
   url = (f"{MODRINTH_API}/search?query={quote(query)}"
-         f"&limit=50&facets={quote(facets_str)}")
+         f"&limit=100&facets={quote(facets_str)}")
   r = requests.get(url, timeout=20)
   r.raise_for_status()
   out = []
@@ -188,6 +195,9 @@ def search_modrinth(query: str, game_id: str = "", game_name: str = "") -> list[
           "downloads": h.get("downloads", 0),
           "source": "Modrinth",
           "version": h.get("version", ""),
+          "description": h.get("description", ""),
+          "icon_url": h.get("icon_url", ""),
+          "categories": h.get("categories", []),
           "project_id": h.get("project_id") or slug,
           "slug": slug,
           "web_url": f"https://modrinth.com/mod/{slug}",
@@ -214,11 +224,15 @@ def search_curseforge(query: str, game_id: str, api_key: str,
   out = []
   for h in r.json().get("data", []):
       slug = h.get("slug", "")
+      logo = h.get("logo", {})
       out.append({
           "name": h.get("name", "?"),
           "author": ", ".join(a.get("name", "") for a in h.get("authors", [])) or "?",
           "downloads": int(h.get("downloadCount", 0)),
           "source": "CurseForge",
+          "description": h.get("summary", ""),
+          "icon_url": logo.get("thumbnailUrl", "") if logo else "",
+          "categories": [c.get("name", "") for c in h.get("categories", [])],
           "cf_mod_id": h.get("id"),
           "web_url": f"https://www.curseforge.com/projects/{slug}" if slug else "",
           "manual_only": False,
