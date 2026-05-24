@@ -15,6 +15,7 @@ Or double-click `run.bat` (Windows).
 
 | Source | API key? |
 |--------|----------|
+| Thunderstore | No (ROUNDS, Lethal Company, Valheim, Risk of Rain 2, etc.) |
 | Modrinth | No |
 | CurseForge | Yes — [console.curseforge.com](https://console.curseforge.com/) |
 | Nexus Mods | Yes — [nexusmods.com account](https://www.nexusmods.com/users/myaccount?tab=api) |
@@ -33,6 +34,9 @@ Or double-click `run.bat` (Windows).
 
 ## New features
 
+- **Thunderstore** integration — search and download mods for ROUNDS, Lethal Company, Valheim, R2, and 30+ communities
+- **Game-specific search** — mod searches are automatically scoped to the selected game
+- **Mouse back/forward** buttons (Button 3/4) and **Alt+Left/Right** for page navigation
 - **Card size** dropdown in Library (Compact → Large)
 - **Dry-run**, **Diff**, **Undo last apply**, **Load order**, **Export mod list**
 - **Profile stats** (file count / size)

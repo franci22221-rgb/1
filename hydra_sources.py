@@ -14,8 +14,10 @@ MODRINTH_API = "https://api.modrinth.com/v2"
 CURSEFORGE_API = "https://api.curseforge.com/v1"
 NEXUS_API = "https://api.nexusmods.com/v1"
 SPACEDOCK_API = "https://spacedock.info/api"
+THUNDERSTORE_API = "https://thunderstore.io"
 
 TRUSTED_SOURCES = (
+    "Thunderstore",
     "Modrinth",
     "CurseForge",
     "Nexus Mods",
@@ -23,6 +25,64 @@ TRUSTED_SOURCES = (
     "GitHub",
     "Manual / Forum",
 )
+
+# Map game names to Thunderstore community slugs
+THUNDERSTORE_COMMUNITIES: dict[str, str] = {
+    "rounds": "rounds",
+    "risk of rain 2": "riskofrain2",
+    "ror2": "riskofrain2",
+    "valheim": "valheim",
+    "lethal company": "lethal-company",
+    "gtfo": "gtfo",
+    "outward": "outward",
+    "talespire": "talespire",
+    "h3vr": "h3vr",
+    "dyson sphere program": "dyson-sphere-program",
+    "content warning": "content-warning",
+    "techtonica": "techtonica",
+    "bonelab": "bonelab",
+    "boneworks": "boneworks",
+    "v rising": "vrising",
+    "mechanica": "mechanica",
+    "sunkenland": "sunkenland",
+    "atomicrops": "atomicrops",
+    "20 minutes till dawn": "20-minutes-till-dawn",
+    "among us": "among-us",
+    "ancient dungeon vr": "ancient-dungeon-vr",
+    "against": "against",
+    "plate up": "plateup",
+    "peglin": "peglin",
+    "rogue tower": "rogue-tower",
+    "inscryption": "inscryption",
+    "starsand": "starsand",
+    "cats are liquid": "cats-are-liquid",
+    "potion craft": "potion-craft",
+    "nearly dead": "nearly-dead",
+    "skul": "skul-the-hero-slayer",
+    "subnautica": "subnautica",
+    "subnautica below zero": "subnautica-below-zero",
+    "timberborn": "timberborn",
+    "nickelodeon all-star brawl 2": "nasb2",
+    "last train outta wormtown": "last-train-outta-wormtown",
+    "muck": "muck",
+    "bellwright": "bellwright",
+    "repo": "repo",
+    "schedule i": "schedule-i",
+}
+
+# Map game names to Modrinth game slugs (for faceted search)
+MODRINTH_GAMES: dict[str, str] = {
+    "minecraft": "minecraft",
+}
+
+# Map game names to CurseForge numeric game IDs
+CURSEFORGE_GAMES: dict[str, str] = {
+    "minecraft": "432",
+    "world of warcraft": "1",
+    "the sims 4": "78062",
+    "stardew valley": "669",
+    "kerbal space program": "3102",
+}
 
 
 def _norm_name(name: str) -> str:
@@ -49,10 +109,74 @@ def dedupe_results(results: list[dict]) -> list[dict]:
     return out
 
 
-def search_modrinth(query: str, game_id: str = "") -> list[dict]:
-  url = f"{MODRINTH_API}/search?query={quote(query)}&limit=30"
-  if game_id:
-      url += f"&facets={quote('[\"project_type:mod\"]')}"
+def _resolve_thunderstore_community(game_name: str) -> str:
+    """Return the Thunderstore community slug for a game name, or empty string."""
+    key = (game_name or "").strip().lower()
+    if key in THUNDERSTORE_COMMUNITIES:
+        return THUNDERSTORE_COMMUNITIES[key]
+    for k, v in THUNDERSTORE_COMMUNITIES.items():
+        if k in key or key in k:
+            return v
+    return ""
+
+
+def _resolve_modrinth_game(game_name: str) -> str:
+    key = (game_name or "").strip().lower()
+    return MODRINTH_GAMES.get(key, "")
+
+
+def _resolve_curseforge_game(game_name: str) -> str:
+    key = (game_name or "").strip().lower()
+    return CURSEFORGE_GAMES.get(key, "")
+
+
+def search_thunderstore(query: str, game_name: str = "") -> list[dict]:
+    community = _resolve_thunderstore_community(game_name)
+    if not community:
+        return []
+    url = f"{THUNDERSTORE_API}/c/{community}/api/v1/package/"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    packages = r.json()
+    q_lower = query.lower()
+    q_terms = q_lower.split()
+    scored = []
+    for pkg in packages:
+        name = pkg.get("name", "")
+        full_name = pkg.get("full_name", "")
+        desc = (pkg.get("versions", [{}])[0].get("description", "")
+                if pkg.get("versions") else "")
+        searchable = f"{name} {full_name} {desc}".lower()
+        if all(t in searchable for t in q_terms):
+            scored.append(pkg)
+    scored.sort(key=lambda p: p.get("rating_score", 0), reverse=True)
+    out = []
+    for pkg in scored[:50]:
+        latest = pkg["versions"][0] if pkg.get("versions") else {}
+        out.append({
+            "name": pkg.get("name", "?"),
+            "author": pkg.get("owner", "?"),
+            "downloads": int(latest.get("downloads", 0)),
+            "source": "Thunderstore",
+            "version": latest.get("version_number", ""),
+            "ts_full_name": pkg.get("full_name", ""),
+            "ts_community": community,
+            "ts_download_url": latest.get("download_url", ""),
+            "web_url": pkg.get("package_url", ""),
+            "manual_only": False,
+        })
+    return out
+
+
+def search_modrinth(query: str, game_id: str = "", game_name: str = "") -> list[dict]:
+  modrinth_game = _resolve_modrinth_game(game_name) if game_name else ""
+  facets = []
+  facets.append('["project_type:mod"]')
+  if modrinth_game:
+      facets.append(f'["categories:{modrinth_game}"]')
+  facets_str = "[" + ",".join(facets) + "]"
+  url = (f"{MODRINTH_API}/search?query={quote(query)}"
+         f"&limit=50&facets={quote(facets_str)}")
   r = requests.get(url, timeout=20)
   r.raise_for_status()
   out = []
@@ -72,16 +196,18 @@ def search_modrinth(query: str, game_id: str = "") -> list[dict]:
   return out
 
 
-def search_curseforge(query: str, game_id: str, api_key: str) -> list[dict]:
+def search_curseforge(query: str, game_id: str, api_key: str,
+                      game_name: str = "") -> list[dict]:
   if not api_key:
       raise RuntimeError("Add CurseForge API key in Settings.")
+  resolved_gid = game_id or _resolve_curseforge_game(game_name)
   try:
-      gid_int = int(game_id)
-  except ValueError:
+      gid_int = int(resolved_gid)
+  except (ValueError, TypeError):
       raise RuntimeError("CurseForge needs a numeric Game ID in the sidebar.")
   r = requests.get(
       f"{CURSEFORGE_API}/mods/search?gameId={gid_int}"
-      f"&searchFilter={quote(query)}&pageSize=30",
+      f"&searchFilter={quote(query)}&pageSize=50",
       headers={"x-api-key": api_key, "Accept": "application/json"},
       timeout=20)
   r.raise_for_status()
@@ -230,22 +356,36 @@ def search_all(cfg: dict, query: str, game_id: str, nexus_domain: str,
       if not enabled.get(src, True):
           return False
       if official_only and src == "Manual / Forum":
-          return True  # still show but manual_only
+          return True
       return True
 
   cf_key = cfg.get("curseforge_api_key", "").strip()
   nx_key = cfg.get("nexus_api_key", "").strip()
 
+  if want("Thunderstore"):
+      ts_community = _resolve_thunderstore_community(game_name)
+      if ts_community:
+          tasks.append(("Thunderstore",
+                        lambda: search_thunderstore(query, game_name)))
+      else:
+          notes.append("Thunderstore skipped (no community for this game)")
   if want("Modrinth"):
-      tasks.append(("Modrinth", lambda: search_modrinth(query, game_id)))
+      tasks.append(("Modrinth",
+                    lambda: search_modrinth(query, game_id, game_name)))
   if want("CurseForge"):
       if cf_key:
-          tasks.append(("CurseForge", lambda: search_curseforge(query, game_id, cf_key)))
+          resolved_gid = game_id or _resolve_curseforge_game(game_name)
+          if resolved_gid:
+              tasks.append(("CurseForge",
+                            lambda: search_curseforge(query, game_id, cf_key, game_name)))
+          else:
+              notes.append("CurseForge skipped (no game ID for this game)")
       else:
           notes.append("CurseForge skipped (no API key)")
   if want("Nexus Mods"):
       if nx_key and nexus_domain:
-          tasks.append(("Nexus Mods", lambda: search_nexus(query, nexus_domain, nx_key)))
+          tasks.append(("Nexus Mods",
+                        lambda: search_nexus(query, nexus_domain, nx_key)))
       else:
           notes.append("Nexus skipped (key or domain missing)")
   if want("SpaceDock"):
@@ -253,10 +393,11 @@ def search_all(cfg: dict, query: str, game_id: str, nexus_domain: str,
   if want("GitHub"):
       tasks.append(("GitHub", lambda: search_github(query, game_name)))
   if want("Manual / Forum"):
-      tasks.append(("Manual / Forum", lambda: search_manual_links(query, game_name or "game")))
+      tasks.append(("Manual / Forum",
+                    lambda: search_manual_links(query, game_name or "game")))
 
   results = []
-  with ThreadPoolExecutor(max_workers=5) as ex:
+  with ThreadPoolExecutor(max_workers=6) as ex:
       futs = {ex.submit(fn): name for name, fn in tasks}
       for fut in as_completed(futs):
           src = futs[fut]
@@ -273,6 +414,8 @@ def resolve_download(mod: dict, cfg: dict) -> tuple[str, str]:
   src = mod.get("source", "")
   if mod.get("manual_only"):
       raise RuntimeError("Manual / forum mod — use Open in browser and copy into profile folder.")
+  if src == "Thunderstore":
+      return thunderstore_file(mod)
   if src == "Modrinth":
       return modrinth_file(mod)
   if src == "CurseForge":
@@ -282,6 +425,16 @@ def resolve_download(mod: dict, cfg: dict) -> tuple[str, str]:
   if src == "SpaceDock":
       return spacedock_file(mod)
   raise RuntimeError(f"Download not supported for {src}. Use Open.")
+
+
+def thunderstore_file(mod: dict) -> tuple[str, str]:
+  dl_url = mod.get("ts_download_url", "")
+  if not dl_url:
+      raise RuntimeError("No Thunderstore download URL available.")
+  full_name = mod.get("ts_full_name", mod.get("name", "mod"))
+  version = mod.get("version", "")
+  filename = f"{full_name}-{version}.zip" if version else f"{full_name}.zip"
+  return dl_url, filename
 
 
 def modrinth_file(mod: dict) -> tuple[str, str]:

@@ -203,6 +203,10 @@ class HydraCompanion(BaseTk):
         self._tray = None
         self.dl_progress = None
         self._search_debounce_id = None
+        self._nav_back_stack = []     # history for back navigation
+        self._nav_forward_stack = []  # history for forward navigation
+        self._nav_current = None      # current page state
+        self._nav_navigating = False  # prevent re-entry while navigating
         self._refresh_all_game_art(save=False)
 
         self._build_styles()
@@ -210,6 +214,33 @@ class HydraCompanion(BaseTk):
         self.show_page("library")
 
         self.bind_all("<Control-Return>", lambda e: self._quick_apply())
+        # Back/forward with Alt+Left/Right (works everywhere)
+        self.bind_all("<Alt-Left>", lambda e: self._nav_go_back())
+        self.bind_all("<Alt-Right>", lambda e: self._nav_go_forward())
+        # Mouse side buttons: on Windows Button-4/5 are XButton1/XButton2,
+        # on Linux (X11) they are Button-8/9.
+        if sys.platform == "win32":
+            for btn in ("<Button-4>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_back())
+                except Exception:
+                    pass
+            for btn in ("<Button-5>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_forward())
+                except Exception:
+                    pass
+        else:
+            for btn in ("<Button-8>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_back())
+                except Exception:
+                    pass
+            for btn in ("<Button-9>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_forward())
+                except Exception:
+                    pass
 
         if HAS_DND:
             self.drop_target_register(DND_FILES)
@@ -373,6 +404,27 @@ class HydraCompanion(BaseTk):
         tk.Label(right, text=" 🔎 ", bg=BG, fg=MUTED,
                  font=("Segoe UI", 11)).pack(side="right")
 
+    # ===== Navigation history =====
+    def _nav_go_back(self):
+        if not self._nav_back_stack:
+            return
+        entry = self._nav_back_stack.pop()
+        if self._nav_current:
+            self._nav_forward_stack.append(self._nav_current)
+        self._nav_navigating = True
+        self.show_page(entry["page"], **entry.get("kw", {}))
+        self._nav_navigating = False
+
+    def _nav_go_forward(self):
+        if not self._nav_forward_stack:
+            return
+        entry = self._nav_forward_stack.pop()
+        if self._nav_current:
+            self._nav_back_stack.append(self._nav_current)
+        self._nav_navigating = True
+        self.show_page(entry["page"], **entry.get("kw", {}))
+        self._nav_navigating = False
+
     # ===== Page dispatcher =====
     def show_page(self, page, **kw):
         if page == "game_detail":
@@ -384,6 +436,23 @@ class HydraCompanion(BaseTk):
             if page == "game_hub":
                 self.detail_profile = (kw.get("profile") or self.detail_profile
                                        or self._default_profile())
+        # Track navigation history for back/forward mouse buttons
+        nav_entry = {"page": page}
+        nav_kw = {}
+        if page in ("game_profiles", "game_hub") and self.detail_game:
+            nav_kw["game"] = self.detail_game
+        if page == "game_hub" and self.detail_profile:
+            nav_kw["profile"] = self.detail_profile
+        if nav_kw:
+            nav_entry["kw"] = nav_kw
+        if not self._nav_navigating:
+            if self._nav_current:
+                self._nav_back_stack.append(self._nav_current)
+                if len(self._nav_back_stack) > 50:
+                    self._nav_back_stack = self._nav_back_stack[-50:]
+            self._nav_forward_stack.clear()
+        self._nav_current = nav_entry
+
         self.current_page = page
         immersive = page in ("game_profiles", "game_hub")
         if immersive:
