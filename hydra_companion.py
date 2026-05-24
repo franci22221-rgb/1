@@ -203,6 +203,10 @@ class HydraCompanion(BaseTk):
         self._tray = None
         self.dl_progress = None
         self._search_debounce_id = None
+        self._nav_back_stack = []     # history for back navigation
+        self._nav_forward_stack = []  # history for forward navigation
+        self._nav_current = None      # current page state
+        self._nav_navigating = False  # prevent re-entry while navigating
         self._refresh_all_game_art(save=False)
 
         self._build_styles()
@@ -210,6 +214,33 @@ class HydraCompanion(BaseTk):
         self.show_page("library")
 
         self.bind_all("<Control-Return>", lambda e: self._quick_apply())
+        # Back/forward with Alt+Left/Right (works everywhere)
+        self.bind_all("<Alt-Left>", lambda e: self._nav_go_back())
+        self.bind_all("<Alt-Right>", lambda e: self._nav_go_forward())
+        # Mouse side buttons: on Windows Button-4/5 are XButton1/XButton2,
+        # on Linux (X11) they are Button-8/9.
+        if sys.platform == "win32":
+            for btn in ("<Button-4>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_back())
+                except Exception:
+                    pass
+            for btn in ("<Button-5>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_forward())
+                except Exception:
+                    pass
+        else:
+            for btn in ("<Button-8>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_back())
+                except Exception:
+                    pass
+            for btn in ("<Button-9>",):
+                try:
+                    self.bind_all(btn, lambda e: self._nav_go_forward())
+                except Exception:
+                    pass
 
         if HAS_DND:
             self.drop_target_register(DND_FILES)
@@ -373,6 +404,27 @@ class HydraCompanion(BaseTk):
         tk.Label(right, text=" 🔎 ", bg=BG, fg=MUTED,
                  font=("Segoe UI", 11)).pack(side="right")
 
+    # ===== Navigation history =====
+    def _nav_go_back(self):
+        if not self._nav_back_stack:
+            return
+        entry = self._nav_back_stack.pop()
+        if self._nav_current:
+            self._nav_forward_stack.append(self._nav_current)
+        self._nav_navigating = True
+        self.show_page(entry["page"], **entry.get("kw", {}))
+        self._nav_navigating = False
+
+    def _nav_go_forward(self):
+        if not self._nav_forward_stack:
+            return
+        entry = self._nav_forward_stack.pop()
+        if self._nav_current:
+            self._nav_back_stack.append(self._nav_current)
+        self._nav_navigating = True
+        self.show_page(entry["page"], **entry.get("kw", {}))
+        self._nav_navigating = False
+
     # ===== Page dispatcher =====
     def show_page(self, page, **kw):
         if page == "game_detail":
@@ -384,6 +436,23 @@ class HydraCompanion(BaseTk):
             if page == "game_hub":
                 self.detail_profile = (kw.get("profile") or self.detail_profile
                                        or self._default_profile())
+        # Track navigation history for back/forward mouse buttons
+        nav_entry = {"page": page}
+        nav_kw = {}
+        if page in ("game_profiles", "game_hub") and self.detail_game:
+            nav_kw["game"] = self.detail_game
+        if page == "game_hub" and self.detail_profile:
+            nav_kw["profile"] = self.detail_profile
+        if nav_kw:
+            nav_entry["kw"] = nav_kw
+        if not self._nav_navigating:
+            if self._nav_current:
+                self._nav_back_stack.append(self._nav_current)
+                if len(self._nav_back_stack) > 50:
+                    self._nav_back_stack = self._nav_back_stack[-50:]
+            self._nav_forward_stack.clear()
+        self._nav_current = nav_entry
+
         self.current_page = page
         immersive = page in ("game_profiles", "game_hub")
         if immersive:
@@ -1065,15 +1134,27 @@ class HydraCompanion(BaseTk):
 
     def _cat_render(self, results, q, notes=None):
         self._search_results = results
+        self._cat_page = 0
         note_txt = ""
         if notes:
             note_txt = "  |  " + "; ".join(notes[:3])
         self._cat_summary.configure(
             text=f"{len(results):,} results for '{q}'{note_txt}")
+        self._cat_render_page()
+
+    def _cat_page_size(self):
+        try:
+            val = int(self._cat_page_size_var.get())
+            return max(5, min(val, 200))
+        except (ValueError, AttributeError):
+            return 20
+
+    def _cat_render_page(self):
         if not hasattr(self, "_catalogue_results"):
             return
         for w in self._catalogue_results.winfo_children():
             w.destroy()
+        results = self._search_results
         if not results:
             tk.Label(self._catalogue_results,
                      text="No mods found. Try another name or add API keys "
@@ -1081,59 +1162,290 @@ class HydraCompanion(BaseTk):
                      bg=BG, fg=MUTED, font=("Segoe UI", 11),
                      wraplength=700, justify="left").pack(pady=24, padx=8)
             return
-        for r in results:
+        page_size = self._cat_page_size()
+        total = len(results)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = max(0, min(self._cat_page, total_pages - 1))
+        self._cat_page = page
+        start = page * page_size
+        end = min(start + page_size, total)
+        page_items = results[start:end]
+
+        # Pagination controls (top)
+        self._cat_pagination_bar(self._catalogue_results, page, total_pages,
+                                 total, start, end)
+        for r in page_items:
             self._cat_result_row(self._catalogue_results, r)
+        # Pagination controls (bottom)
+        self._cat_pagination_bar(self._catalogue_results, page, total_pages,
+                                 total, start, end)
+
+    def _cat_pagination_bar(self, parent, page, total_pages, total, start, end):
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill="x", pady=(4, 8))
+        info = tk.Label(bar,
+                        text=f"Showing {start+1}–{end} of {total:,}   "
+                             f"Page {page+1} / {total_pages}",
+                        bg=BG, fg=MUTED, font=("Segoe UI", 9))
+        info.pack(side="left")
+        # Page size control
+        tk.Label(bar, text="  Per page:", bg=BG, fg=MUTED,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
+        if not hasattr(self, "_cat_page_size_var"):
+            self._cat_page_size_var = tk.StringVar(value="20")
+        ps_ent = tk.Entry(bar, textvariable=self._cat_page_size_var,
+                          width=4, justify="center")
+        style_entry(ps_ent)
+        ps_ent.pack(side="left")
+        ps_ent.bind("<Return>",
+                    lambda e: self._cat_change_page_size())
+        # Nav buttons
+        if page > 0:
+            b = tk.Button(bar, text="« First",
+                          command=lambda: self._cat_goto_page(0))
+            style_button(b, ghost=True)
+            b.pack(side="left", padx=4)
+            b = tk.Button(bar, text="‹ Prev",
+                          command=lambda: self._cat_goto_page(page - 1))
+            style_button(b, ghost=True)
+            b.pack(side="left", padx=2)
+        if page < total_pages - 1:
+            b = tk.Button(bar, text="Next ›",
+                          command=lambda: self._cat_goto_page(page + 1))
+            style_button(b, ghost=True)
+            b.pack(side="left", padx=2)
+            b = tk.Button(bar, text="Last »",
+                          command=lambda: self._cat_goto_page(total_pages - 1))
+            style_button(b, ghost=True)
+            b.pack(side="left", padx=4)
+
+    def _cat_goto_page(self, page):
+        self._cat_page = page
+        self._cat_render_page()
+
+    def _cat_change_page_size(self):
+        self._cat_page = 0
+        self._cat_render_page()
+
+    def _fetch_icon_async(self, url, label, size=(64, 64)):
+        """Download an icon from URL and set it on a tk.Label."""
+        if not url or not HAS_PIL:
+            return
+        def _fetch():
+            try:
+                resp = requests.get(url, timeout=10, stream=True)
+                resp.raise_for_status()
+                from io import BytesIO
+                img = Image.open(BytesIO(resp.content))
+                img = img.resize(size, Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                def _apply():
+                    label.configure(image=photo, text="")
+                    label._photo_ref = photo
+                self.after(0, _apply)
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
 
     def _cat_result_row(self, parent, r):
-        row = tk.Frame(parent, bg=PANEL, padx=0, pady=0)
-        row.pack(fill="x", pady=6)
-        # Thumb (letter tile)
-        thumb_w, thumb_h = 96, 96
+        row = tk.Frame(parent, bg=PANEL, padx=0, pady=0,
+                       highlightbackground=BORDER, highlightthickness=1)
+        row.pack(fill="x", pady=4)
+        # Icon / thumbnail
         thumb = tk.Label(row, text=(r["name"][:1] or "?").upper(),
                          bg=PANEL_2, fg=ACCENT,
-                         font=("Segoe UI", 28, "bold"),
-                         width=int(thumb_w / 14),
-                         height=int(thumb_h / 30))
-        thumb.pack(side="left", padx=0, pady=0)
+                         font=("Segoe UI", 22, "bold"),
+                         width=5, height=3)
+        thumb.pack(side="left", padx=(4, 0), pady=4)
+        icon_url = r.get("icon_url", "")
+        if icon_url:
+            self._fetch_icon_async(icon_url, thumb, size=(64, 64))
 
-        info = tk.Frame(row, bg=PANEL, padx=18, pady=14)
+        info = tk.Frame(row, bg=PANEL, padx=14, pady=10)
         info.pack(side="left", fill="both", expand=True)
+        # Title
         tk.Label(info, text=r["name"], bg=PANEL, fg=TEXT,
                  anchor="w", font=("Segoe UI", 12, "bold")
                  ).pack(anchor="w")
+        # Meta line
         alt = r.get("alt_sources", [])
         src_txt = r["source"]
         if alt:
             src_txt += " (+ " + ", ".join(s for s in alt if s != r["source"]) + ")"
+        ver = r.get("version", "")
+        ver_txt = f"  v{ver}" if ver else ""
         tk.Label(info,
-                 text=f"by {r['author']}    {r.get('downloads', 0):,} downloads"
-                      f"    {src_txt}",
+                 text=f"by {r['author']}  ·  {r.get('downloads', 0):,} downloads"
+                      f"  ·  {src_txt}{ver_txt}",
                  bg=PANEL, fg=MUTED, anchor="w",
-                 font=("Segoe UI", 10)).pack(anchor="w", pady=(4, 0))
-        dep = ksp_dependency_hint(r.get("name", ""))
-        if dep:
-            tk.Label(info, text="Often needs: " + ", ".join(dep),
-                     bg=PANEL, fg=ACCENT_2, anchor="w",
-                     font=("Segoe UI", 9)).pack(anchor="w")
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+        # Description
+        desc = r.get("description", "")
+        if desc:
+            tk.Label(info, text=desc[:200] + ("…" if len(desc) > 200 else ""),
+                     bg=PANEL, fg="#b0b0b5", anchor="w", wraplength=500,
+                     justify="left",
+                     font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+        # Categories
+        cats = r.get("categories", [])
+        if cats:
+            cat_txt = "  ".join(f"[{c}]" for c in cats[:5] if c)
+            if cat_txt:
+                tk.Label(info, text=cat_txt,
+                         bg=PANEL, fg=ACCENT_2, anchor="w",
+                         font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        # Dependencies
+        deps = r.get("dependencies", [])
+        if deps:
+            dep_names = [d.split("-")[1] if "-" in d else d for d in deps[:4]]
+            more = f" +{len(deps)-4} more" if len(deps) > 4 else ""
+            tk.Label(info, text="Requires: " + ", ".join(dep_names) + more,
+                     bg=PANEL, fg="#e09040", anchor="w",
+                     font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
 
+        # Action buttons
         right = tk.Frame(row, bg=PANEL)
-        right.pack(side="right", padx=14)
-        if r.get("web_url"):
-            ob = tk.Button(right, text="Open",
-                           command=lambda u=r["web_url"]: webbrowser.open(u))
-            style_button(ob, ghost=True)
-            ob.pack(pady=(0, 4))
-            ToolTip(ob, "Open mod page in browser")
+        right.pack(side="right", padx=12, pady=8)
+        # Preview button
+        pv = tk.Button(right, text="Preview",
+                       command=lambda mod=r: self._cat_preview_mod(mod))
+        style_button(pv, ghost=True)
+        pv.pack(pady=(0, 4), fill="x")
+        ToolTip(pv, "View full details")
+        # Install button
         if r.get("manual_only"):
-            tk.Label(right, text="Manual", bg=PANEL, fg=MUTED,
-                     font=("Segoe UI", 9)).pack()
-            ToolTip(right, "Manual installation required")
+            if r.get("web_url"):
+                ob = tk.Button(right, text="Open in browser",
+                               command=lambda u=r["web_url"]: webbrowser.open(u))
+                style_button(ob, ghost=True)
+                ob.pack(fill="x")
         else:
-            dl = tk.Button(right, text="⬇ Install",
+            dl = tk.Button(right, text="Install",
                            command=lambda mod=r: self._cat_download(mod))
             style_button(dl, primary=True)
-            dl.pack()
+            dl.pack(fill="x")
             ToolTip(dl, "Download and install to selected profile")
+
+    def _cat_preview_mod(self, mod):
+        """Show a Thunderstore-style mod detail preview page."""
+        if not hasattr(self, "_catalogue_results"):
+            return
+        for w in self._catalogue_results.winfo_children():
+            w.destroy()
+        container = self._catalogue_results
+
+        # Back button
+        top = tk.Frame(container, bg=BG)
+        top.pack(fill="x", pady=(0, 8))
+        back = tk.Label(top, text="← Back to results", bg=BG, fg=ACCENT_2,
+                        cursor="hand2", font=("Segoe UI", 11, "underline"))
+        back.pack(side="left")
+        back.bind("<Button-1>", lambda e: self._cat_render_page())
+
+        detail = tk.Frame(container, bg=PANEL, padx=24, pady=20,
+                          highlightbackground=BORDER, highlightthickness=1)
+        detail.pack(fill="both", expand=True)
+
+        # Header with icon + title
+        header = tk.Frame(detail, bg=PANEL)
+        header.pack(fill="x", pady=(0, 16))
+        icon_lbl = tk.Label(header, text=(mod["name"][:1] or "?").upper(),
+                            bg=PANEL_2, fg=ACCENT,
+                            font=("Segoe UI", 36, "bold"),
+                            width=5, height=3)
+        icon_lbl.pack(side="left", padx=(0, 20))
+        icon_url = mod.get("icon_url", "")
+        if icon_url:
+            self._fetch_icon_async(icon_url, icon_lbl, size=(96, 96))
+        title_area = tk.Frame(header, bg=PANEL)
+        title_area.pack(side="left", fill="both", expand=True)
+        tk.Label(title_area, text=mod["name"], bg=PANEL, fg=TEXT,
+                 font=("Segoe UI", 20, "bold"), anchor="w").pack(anchor="w")
+        desc_short = mod.get("description", "")
+        if desc_short:
+            tk.Label(title_area, text=desc_short, bg=PANEL, fg=MUTED,
+                     font=("Segoe UI", 10), anchor="w",
+                     wraplength=500, justify="left").pack(anchor="w", pady=(4, 0))
+        tk.Label(title_area,
+                 text=f"By {mod['author']}",
+                 bg=PANEL, fg=ACCENT_2, font=("Segoe UI", 10),
+                 anchor="w").pack(anchor="w", pady=(4, 0))
+        if mod.get("web_url"):
+            link = tk.Label(title_area, text=mod["web_url"],
+                            bg=PANEL, fg=ACCENT_2, cursor="hand2",
+                            font=("Segoe UI", 9, "underline"), anchor="w")
+            link.pack(anchor="w", pady=(2, 0))
+            link.bind("<Button-1>",
+                      lambda e, u=mod["web_url"]: webbrowser.open(u))
+
+        tk.Frame(detail, bg=BORDER, height=1).pack(fill="x", pady=8)
+
+        # Info table
+        info_items = [
+            ("Total downloads", f"{mod.get('downloads', 0):,}"),
+            ("Version", mod.get("version", "N/A")),
+            ("Source", mod.get("source", "?")),
+        ]
+        rating = mod.get("rating", 0)
+        if rating:
+            info_items.append(("Rating", f"{rating}"))
+        cats = mod.get("categories", [])
+        if cats:
+            info_items.append(("Categories",
+                               "  ".join(f"[{c}]" for c in cats if c)))
+        date_up = mod.get("date_updated", "")
+        if date_up:
+            info_items.append(("Last updated", date_up[:10]))
+        for label, val in info_items:
+            row = tk.Frame(detail, bg=PANEL)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, bg=PANEL, fg=MUTED,
+                     font=("Segoe UI", 10, "bold"), width=18,
+                     anchor="w").pack(side="left")
+            tk.Label(row, text=val, bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 10), anchor="w").pack(side="left")
+
+        tk.Frame(detail, bg=BORDER, height=1).pack(fill="x", pady=8)
+
+        # Action buttons
+        btn_row = tk.Frame(detail, bg=PANEL)
+        btn_row.pack(fill="x", pady=(4, 12))
+        if not mod.get("manual_only"):
+            dl = tk.Button(btn_row, text="Install",
+                           command=lambda: self._cat_download(mod))
+            style_button(dl, primary=True)
+            dl.pack(side="left", padx=(0, 8))
+        if mod.get("web_url"):
+            ob = tk.Button(btn_row, text="Open on website",
+                           command=lambda: webbrowser.open(mod["web_url"]))
+            style_button(ob, ghost=True)
+            ob.pack(side="left")
+
+        # Dependencies
+        deps = mod.get("dependencies", [])
+        if deps:
+            tk.Frame(detail, bg=BORDER, height=1).pack(fill="x", pady=8)
+            tk.Label(detail,
+                     text="This mod requires the following mods to function",
+                     bg=PANEL, fg="#e09040",
+                     font=("Segoe UI", 11, "bold"), anchor="w"
+                     ).pack(anchor="w", pady=(4, 8))
+            for d in deps:
+                parts = d.split("-")
+                dep_name = parts[1] if len(parts) >= 2 else d
+                dep_author = parts[0] if len(parts) >= 2 else ""
+                dep_ver = parts[2] if len(parts) >= 3 else ""
+                dep_row = tk.Frame(detail, bg=PANEL_2, padx=12, pady=8)
+                dep_row.pack(fill="x", pady=2)
+                tk.Label(dep_row, text=dep_name, bg=PANEL_2, fg=ACCENT_2,
+                         font=("Segoe UI", 10, "bold"),
+                         anchor="w").pack(anchor="w")
+                if dep_author:
+                    ver_txt = f"  (v{dep_ver})" if dep_ver else ""
+                    tk.Label(dep_row,
+                             text=f"by {dep_author}{ver_txt}",
+                             bg=PANEL_2, fg=MUTED, font=("Segoe UI", 9),
+                             anchor="w").pack(anchor="w")
 
     def _cat_download(self, mod):
         game = self._cat_target_game.get()
@@ -1482,6 +1794,7 @@ class HydraCompanion(BaseTk):
                     text="Type at least 2 characters to search…")
             return
         g = self.cfg["games"].get(self.detail_game, {})
+        self._hub_online_page = 0
         self._hub_online_status.configure(text=f"Searching for '{q}'…")
         for w in self._hub_online_results.winfo_children():
             w.destroy()
@@ -1507,35 +1820,102 @@ class HydraCompanion(BaseTk):
             w.destroy()
         note = ("  |  " + "; ".join(notes[:2])) if notes else ""
         self._hub_online_status.configure(
-            text=f"{len(results)} results for '{q}'{note}")
+            text=f"{len(results):,} results for '{q}'{note}")
         if not results:
             tk.Label(self._hub_online_results,
                      text="No mods found. Try another search term.",
                      bg=TS_MAIN, fg=MUTED, font=("Segoe UI", 11)).pack(pady=40)
             return
-        for r in results:
-            row = tk.Frame(self._hub_online_results, bg="#1e2329")
-            row.pack(fill="x", pady=5, padx=4)
+        # Pagination for hub online
+        if not hasattr(self, "_hub_online_page"):
+            self._hub_online_page = 0
+        self._hub_online_all_results = results
+        self._hub_render_online_page()
+
+    def _hub_render_online_page(self):
+        if not hasattr(self, "_hub_online_results"):
+            return
+        for w in self._hub_online_results.winfo_children():
+            w.destroy()
+        results = self._hub_online_all_results
+        page_size = 20
+        total = len(results)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = max(0, min(self._hub_online_page, total_pages - 1))
+        self._hub_online_page = page
+        start = page * page_size
+        end = min(start + page_size, total)
+        # Pagination bar
+        if total_pages > 1:
+            bar = tk.Frame(self._hub_online_results, bg=TS_MAIN)
+            bar.pack(fill="x", pady=(4, 8))
+            tk.Label(bar,
+                     text=f"Showing {start+1}–{end} of {total:,}   "
+                          f"Page {page+1}/{total_pages}",
+                     bg=TS_MAIN, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(side="left")
+            if page > 0:
+                b = self._ts_button(bar, "‹ Prev",
+                    lambda: self._hub_online_goto(page - 1), outline=True)
+                b.pack(side="left", padx=4)
+            if page < total_pages - 1:
+                b = self._ts_button(bar, "Next ›",
+                    lambda: self._hub_online_goto(page + 1), outline=True)
+                b.pack(side="left", padx=4)
+        for r in results[start:end]:
+            row = tk.Frame(self._hub_online_results, bg="#1e2329",
+                           highlightbackground=BORDER, highlightthickness=1)
+            row.pack(fill="x", pady=4, padx=4)
+            # Icon
+            icon_lbl = tk.Label(row, text=(r["name"][:1] or "?").upper(),
+                                bg=PANEL_2, fg=ACCENT,
+                                font=("Segoe UI", 18, "bold"),
+                                width=4, height=2)
+            icon_lbl.pack(side="left", padx=(4, 0), pady=4)
+            icon_url = r.get("icon_url", "")
+            if icon_url:
+                self._fetch_icon_async(icon_url, icon_lbl, size=(48, 48))
             info = tk.Frame(row, bg="#1e2329")
-            info.pack(side="left", fill="x", expand=True, padx=12, pady=12)
+            info.pack(side="left", fill="x", expand=True, padx=12, pady=8)
             tk.Label(info, text=r["name"], bg="#1e2329", fg=TEXT,
                      font=("Segoe UI", 12, "bold"), anchor="w").pack(anchor="w")
+            ver = r.get("version", "")
+            ver_txt = f"  v{ver}" if ver else ""
             tk.Label(info,
                      text=f"{r.get('author','?')}  ·  {r['source']}  ·  "
-                          f"{r.get('downloads',0):,} downloads",
+                          f"{r.get('downloads',0):,} dl{ver_txt}",
                      bg="#1e2329", fg=MUTED, font=("Segoe UI", 9)
-                     ).pack(anchor="w", pady=(4, 0))
+                     ).pack(anchor="w", pady=(2, 0))
+            desc = r.get("description", "")
+            if desc:
+                tk.Label(info, text=desc[:150] + ("…" if len(desc) > 150 else ""),
+                         bg="#1e2329", fg="#b0b0b5", anchor="w",
+                         wraplength=400, justify="left",
+                         font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+            deps = r.get("dependencies", [])
+            if deps:
+                dep_names = [d.split("-")[1] if "-" in d else d for d in deps[:3]]
+                more = f" +{len(deps)-3}" if len(deps) > 3 else ""
+                tk.Label(info, text="Req: " + ", ".join(dep_names) + more,
+                         bg="#1e2329", fg="#e09040",
+                         font=("Segoe UI", 8), anchor="w"
+                         ).pack(anchor="w", pady=(2, 0))
             acts = tk.Frame(row, bg="#1e2329")
-            acts.pack(side="right", padx=12, pady=12)
-            if r.get("web_url"):
-                self._ts_button(
-                    acts, "Open", lambda u=r["web_url"]: webbrowser.open(u),
-                    outline=True).pack(side="top", pady=2)
+            acts.pack(side="right", padx=12, pady=8)
             if not r.get("manual_only"):
                 self._ts_button(
                     acts, "Install",
                     lambda mod=r: self._hub_install(mod),
                     primary=True).pack(side="top", pady=2)
+            if r.get("web_url"):
+                self._ts_button(
+                    acts, "Preview",
+                    lambda u=r["web_url"]: webbrowser.open(u),
+                    outline=True).pack(side="top", pady=2)
+
+    def _hub_online_goto(self, page):
+        self._hub_online_page = page
+        self._hub_render_online_page()
 
     def _hub_install(self, mod):
         self.status_var.set(f"Installing {mod['name']}…")

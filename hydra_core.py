@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "catalogue_source": "All sources",
     "official_sources_only": True,
     "enabled_sources": {
+        "Thunderstore": True,
         "Modrinth": True,
         "CurseForge": True,
         "Nexus Mods": True,
@@ -66,7 +67,7 @@ GAME_PRESETS = {
         "mod_subfolder": "mods",
         "game_id": "",
         "nexus_domain": "",
-        "sources": ["Modrinth", "CurseForge", "GitHub", "Manual / Forum"],
+        "sources": ["Thunderstore", "GitHub", "Manual / Forum"],
     },
 }
 
