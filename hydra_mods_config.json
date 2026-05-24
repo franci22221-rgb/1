@@ -1,0 +1,45 @@
+{
+  "curseforge_api_key": "",
+  "hydra_launcher_path": "I:/hydra/Hydra.exe",
+  "use_symlinks": false,
+  "active_game": "rounds",
+  "games": {
+    "rounds": {
+      "profiles": [
+        "Vanilla",
+        "1",
+        "_AutoBackup_20260524_152115"
+      ],
+      "notes": {},
+      "game_folder": "F:/games multy/ROUNDS",
+      "mod_subfolder": "mods",
+      "game_id": "",
+      "icon_url": "",
+      "extra_folders": [],
+      "applied_profile": "Vanilla",
+      "applied_hash": "948c41589639ca12968c77a9d34ca0764dbc7ef4",
+      "favorite": false,
+      "nexus_domain": "",
+      "tags": [],
+      "manual_mods": [],
+      "last_backup_profile": "_AutoBackup_20260524_152115",
+      "game_version_filter": "",
+      "cover_path": "F:\\games multy\\ROUNDS\\ROUNDS_Data\\StreamingAssets\\SaveIcon_PLAYSTATION.png",
+      "banner_path": "F:\\games multy\\ROUNDS\\ROUNDS_Data\\StreamingAssets\\SaveIcon_PLAYSTATION.png"
+    }
+  },
+  "nexus_api_key": "PCZ7MszQdLlrmo6b4an/por9CaWR4d4WccmGS87zPDzdMtIRLg==--Qduufe40iJjMfEeL--7jym9lcVM9L9JBE6LFxWkg==",
+  "library_card_size": "Normal",
+  "active_profile": "Vanilla",
+  "catalogue_source": "All sources",
+  "official_sources_only": true,
+  "enabled_sources": {
+    "Modrinth": true,
+    "CurseForge": true,
+    "Nexus Mods": true,
+    "SpaceDock": true,
+    "GitHub": true,
+    "Manual / Forum": false
+  },
+  "first_run_complete": true
+}
